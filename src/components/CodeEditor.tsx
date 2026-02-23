@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  Copy,
+  Check,
 } from "lucide-react";
 
 // Define props interface
@@ -43,6 +45,17 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
     "// Translated code will appear here",
   );
   const [user, setUser] = useState<any>(null);
+  const [isValidated, setIsValidated] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [submissionSuccess, setSubmissionSuccess] = useState(false);
+
+  const [copiedIr, setCopiedIr] = useState(false);
+
+  const handleCopyIr = () => {
+    navigator.clipboard.writeText(irOutput);
+    setCopiedIr(true);
+    setTimeout(() => setCopiedIr(false), 2000);
+  };
 
   // Fetch User on Mount
   useEffect(() => {
@@ -58,6 +71,7 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
   // Handle Code Submission
   const handleSubmit = async () => {
     if (!user) return alert("Please login first");
+    if (!isValidated) return alert("Please validate your code successfully before submitting.");
     setLoading(true);
 
     try {
@@ -71,8 +85,8 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
       });
 
       if (error) throw error;
-      alert("Code submitted successfully!");
-      setAiHints([...aiHints, "Great job! Consider reducing time complexity."]);
+      setSubmissionSuccess(true);
+      setAiHints((prev) => [...prev, "Submission successful!"]);
     } catch (error: any) {
       alert("Error submitting: " + error.message);
     } finally {
@@ -80,13 +94,80 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
     }
   };
 
-  const handleValidate = () => {
-    setIrOutput(
-      "{\n  'status': 'valid',\n  'ir_version': '1.0',\n  'nodes': 15\n}",
-    );
-    setTranslatedCode(
-      `// Converted to optimized ${language}\nfunction opt() { ... }`,
-    );
+  const handleValidate = async () => {
+    if (!description.trim() || !code.trim() || code.includes("Write your source code here")) {
+      alert("Please provide both a valid problem description and code.");
+      return;
+    }
+
+    setIsEvaluating(true);
+    setAiHints(["Evaluating code correctness with local LLM..."]);
+    setIrOutput("Waiting for validation...");
+    setTranslatedCode("Waiting for validation...");
+    setIsValidated(false);
+    setSubmissionSuccess(false);
+
+    try {
+      // 1. Check Correctness
+      const resCorrectness = await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-oss', // Updated to match user's installed model
+          prompt: `You are an expert code reviewer. Read the following problem description and the provided code. Is the code a completely correct solution to the problem? Respond with EXACTLY the word 'CORRECT' if it is correct, or provide brief feedback on what is wrong if it is incorrect.\nProblem: ${description}\nCode:\n${code}`,
+          stream: false
+        })
+      });
+
+      if (!resCorrectness.ok) throw new Error("Ollama endpoint not reachable");
+
+      const dataCorrectness = await resCorrectness.json();
+      const feedback = dataCorrectness.response.trim();
+
+      if (feedback.toUpperCase().includes("CORRECT") && feedback.length < 50) {
+        setAiHints(["Code is CORRECT! Generating IR and translations..."]);
+
+        // 2. Generate IR and Translations in parallel
+        const [resIR, resTranslate] = await Promise.all([
+          fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'gpt-oss',
+              prompt: `Generate high-level pseudocode for the following code. Output ONLY the pseudocode. Do not include any other text.\nCode:\n${code}`,
+              stream: false
+            })
+          }),
+          fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'gpt-oss',
+              prompt: `Translate the following code into Python, Java, and C++. Format the output clearly with markdown code blocks.\nCode:\n${code}`,
+              stream: false
+            })
+          })
+        ]);
+
+        const dataIR = await resIR.json();
+        const dataTranslate = await resTranslate.json();
+
+        setIrOutput(dataIR.response);
+        setTranslatedCode(dataTranslate.response);
+        setAiHints(["Validation complete. Code is correct. You can now save your submission."]);
+        setIsValidated(true);
+      } else {
+        setAiHints(["Validation Failed", feedback, "Please fix your code and try validating again."]);
+        setIrOutput("Validation failed. Please fix the code based on the feedback.");
+        setTranslatedCode("Validation failed. Please fix the code based on the feedback.");
+      }
+    } catch (error: any) {
+      setAiHints(["Error validating with local LLM. Make sure Ollama is running.", error.message]);
+      setIrOutput("Error connecting to evaluation engine.");
+      setTranslatedCode("Error connecting to evaluation engine.");
+    } finally {
+      setIsEvaluating(false);
+    }
   };
 
   return (
@@ -137,7 +218,7 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
       </header>
 
       {/* ================= MAIN GRID LAYOUT ================= */}
-      <div className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-y-auto lg:overflow-hidden">
+      <div className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-y-auto lg:overflow-hidden min-h-0">
         {/* Left Column */}
         <div className="lg:col-span-7 flex flex-col gap-4 h-full">
           <div className="flex-1 relative flex flex-col rounded-xl border border-blue-500/30 bg-slate-900/40 backdrop-blur-sm overflow-hidden shadow-[0_0_30px_rgba(59,130,246,0.1)]">
@@ -147,9 +228,14 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
               </span>
               <button
                 onClick={handleValidate}
-                className="px-3 py-1 text-xs font-bold bg-slate-200 text-slate-900 hover:bg-white rounded shadow-sm transition-all"
+                disabled={isEvaluating}
+                className={`px-3 py-1 text-xs font-bold rounded shadow-sm transition-all focus:outline-none ${isEvaluating
+                  ? "bg-slate-400 text-slate-700 cursor-not-allowed"
+                  : "bg-slate-200 text-slate-900 hover:bg-white"
+                  }`}
               >
-                Validate
+                {isEvaluating ? <Loader2 className="animate-spin inline-block w-3 h-3 mr-1" /> : null}
+                {isEvaluating ? "Validating..." : "Validate"}
               </button>
             </div>
             <div className="flex-1 pt-2">
@@ -187,8 +273,8 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
         </div>
 
         {/* Right Column */}
-        <div className="lg:col-span-5 flex flex-col gap-4 h-full">
-          <div className="h-1/3 rounded-xl border border-pink-500/30 bg-slate-900/40 backdrop-blur-sm overflow-hidden shadow-[0_0_20px_rgba(236,72,153,0.1)]">
+        <div className="lg:col-span-5 flex flex-col gap-4 h-full min-h-0">
+          <div className="flex-[0.8] min-h-0 rounded-xl border border-pink-500/30 bg-slate-900/40 backdrop-blur-sm overflow-hidden shadow-[0_0_20px_rgba(236,72,153,0.1)] flex flex-col">
             <div className="px-4 py-2 bg-pink-900/20 border-b border-pink-500/20 flex items-center gap-2">
               <Brain size={16} className="text-pink-400" />
               <span className="text-sm font-semibold text-pink-300">
@@ -210,13 +296,22 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
             </div>
           </div>
 
-          <div className="h-1/3 flex gap-4">
+          <div className="flex-[1.2] min-h-0 flex gap-4">
             <div className="w-1/2 rounded-xl border border-yellow-500/30 bg-slate-900/40 backdrop-blur-sm overflow-hidden flex flex-col">
-              <div className="px-3 py-2 bg-yellow-900/20 border-b border-yellow-500/20 flex items-center gap-2">
-                <FileJson size={14} className="text-yellow-400" />
-                <span className="text-xs font-bold text-yellow-300 uppercase tracking-wider">
-                  Struct IR
-                </span>
+              <div className="px-3 py-2 bg-yellow-900/20 border-b border-yellow-500/20 flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <FileJson size={14} className="text-yellow-400" />
+                  <span className="text-xs font-bold text-yellow-300 uppercase tracking-wider">
+                    Struct IR
+                  </span>
+                </div>
+                <button
+                  onClick={handleCopyIr}
+                  className="text-yellow-400 hover:text-yellow-300 p-1 rounded-md transition-colors"
+                  title="Copy IR"
+                >
+                  {copiedIr ? <Check size={14} /> : <Copy size={14} />}
+                </button>
               </div>
               <pre className="flex-1 p-3 text-[10px] text-yellow-100/70 font-mono overflow-auto custom-scrollbar">
                 {irOutput}
@@ -247,37 +342,54 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
             </div>
           </div>
 
-          <div className="flex-1 rounded-xl border border-emerald-500/30 bg-emerald-900/10 backdrop-blur-sm flex flex-col justify-between p-6 relative overflow-hidden group">
+          <div className="flex-[1] min-h-0 rounded-xl border border-emerald-500/30 bg-emerald-900/10 backdrop-blur-sm flex flex-col justify-between p-6 relative overflow-hidden group">
             <div className="absolute inset-0 bg-emerald-500/5 group-hover:bg-emerald-500/10 transition-colors"></div>
 
-            <div>
-              <h3 className="text-lg font-bold text-emerald-400 mb-2 flex items-center gap-2">
-                <CheckCircle2 size={20} /> Ready to Submit?
-              </h3>
-              <p className="text-xs text-emerald-200/60">
-                Ensure your description matches the logic provided. This will be
-                recorded as Attempt #1.
-              </p>
-            </div>
+            {submissionSuccess ? (
+              <div className="flex flex-col items-center justify-center h-full space-y-4">
+                <CheckCircle2 size={48} className="text-emerald-400" />
+                <h3 className="text-xl font-bold text-emerald-400">Submission Success!</h3>
+                <p className="text-sm text-emerald-200/80 text-center">
+                  Your code has been successfully validated and saved.
+                </p>
+                <button
+                  onClick={() => onNavigate?.("dashboard")}
+                  className="mt-4 px-6 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg shadow-lg flex items-center gap-2 transition-transform hover:-translate-y-1"
+                >
+                  <LayoutDashboard size={18} />
+                  Return to Dashboard
+                </button>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <h3 className="text-lg font-bold text-emerald-400 mb-2 flex items-center gap-2">
+                    <CheckCircle2 size={20} /> Ready to Submit?
+                  </h3>
+                  <p className="text-xs text-emerald-200/60">
+                    Ensure your description matches the logic provided, and validate your code first.
+                  </p>
+                </div>
 
-            <button
-              onClick={handleSubmit}
-              disabled={loading}
-              className={`w-full py-4 mt-4 rounded-lg font-bold text-sm uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-all transform hover:-translate-y-1
-                ${
-                  loading
-                    ? "bg-slate-700 text-slate-400 cursor-not-allowed"
-                    : "bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20"
-                }
-              `}
-            >
-              {loading ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Save size={18} />
-              )}
-              {loading ? "Processing..." : "Submit / Save"}
-            </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={loading || !isValidated}
+                  className={`w-full py-4 mt-4 rounded-lg font-bold text-sm uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-all transform
+                    ${loading || !isValidated
+                      ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700"
+                      : "bg-emerald-500 hover:bg-emerald-400 hover:-translate-y-1 text-slate-950 shadow-emerald-500/20"
+                    }
+                  `}
+                >
+                  {loading ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  {loading ? "Processing..." : !isValidated ? "Validate First to Save" : "Submit / Save"}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
