@@ -71,20 +71,60 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
   // Handle Code Submission
   const handleSubmit = async () => {
     if (!user) return alert("Please login first");
+    if (!description.trim()) return alert("Please provide a problem description.");
     if (!isValidated) return alert("Please validate your code successfully before submitting.");
     setLoading(true);
 
     try {
-      const { error } = await supabase.from("submissions").insert({
-        user_id: user.id,
-        source_code: code,
-        description: description,
-        language: language,
-        ir_output: irOutput,
-        status: "submitted",
-      });
+      // 0. Insert dynamically typed Problem
+      const { data: newProblem, error: problemError } = await supabase
+        .from("problems")
+        .insert({
+          problem_statement: description,
+        })
+        .select()
+        .single();
 
-      if (error) throw error;
+      if (problemError) throw problemError;
+
+      // 1. Insert Submission
+      const { data: sub, error: subError } = await supabase
+        .from("submissions")
+        .insert({
+          user_id: user.id,
+          problem_id: newProblem.problem_id,
+          source_code: code,
+          source_language: language,
+          validation_status: "valid",
+        })
+        .select()
+        .single();
+
+      if (subError) throw subError;
+
+      // 2. Insert Pseudocode
+      const { data: pseudo, error: pseudoError } = await supabase
+        .from("pseudocodes")
+        .insert({
+          submission_id: sub.submission_id,
+          structured_blocks: JSON.stringify({ ir: irOutput }),
+        })
+        .select()
+        .single();
+
+      if (pseudoError) throw pseudoError;
+
+      // 3. Insert Translations
+      const { error: transError } = await supabase
+        .from("translations")
+        .insert({
+          pseudocode_id: pseudo.pseudocode_id,
+          target_language: "multiple",
+          translated_code: translatedCode,
+        });
+
+      if (transError) throw transError;
+
       setSubmissionSuccess(true);
       setAiHints((prev) => [...prev, "Submission successful!"]);
     } catch (error: any) {
@@ -226,17 +266,29 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
               <span className="text-sm font-semibold text-blue-300 flex items-center gap-2">
                 <CodeIcon size={16} /> Code Submission Area
               </span>
-              <button
-                onClick={handleValidate}
-                disabled={isEvaluating}
-                className={`px-3 py-1 text-xs font-bold rounded shadow-sm transition-all focus:outline-none ${isEvaluating
-                  ? "bg-slate-400 text-slate-700 cursor-not-allowed"
-                  : "bg-slate-200 text-slate-900 hover:bg-white"
-                  }`}
-              >
-                {isEvaluating ? <Loader2 className="animate-spin inline-block w-3 h-3 mr-1" /> : null}
-                {isEvaluating ? "Validating..." : "Validate"}
-              </button>
+              <div className="flex items-center gap-3">
+                <select
+                  className="bg-slate-950 text-xs text-purple-200 border border-purple-500/30 rounded px-2 py-1 outline-none"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  title="Target Language"
+                >
+                  <option value="javascript">JS</option>
+                  <option value="python">Python</option>
+                  <option value="cpp">C++</option>
+                </select>
+                <button
+                  onClick={handleValidate}
+                  disabled={isEvaluating}
+                  className={`px-3 py-1 text-xs font-bold rounded shadow-sm transition-all focus:outline-none ${isEvaluating
+                    ? "bg-slate-400 text-slate-700 cursor-not-allowed"
+                    : "bg-slate-200 text-slate-900 hover:bg-white"
+                    }`}
+                >
+                  {isEvaluating ? <Loader2 className="animate-spin inline-block w-3 h-3 mr-1" /> : null}
+                  {isEvaluating ? "Validating..." : "Validate"}
+                </button>
+              </div>
             </div>
             <div className="flex-1 pt-2">
               <Editor
@@ -258,7 +310,7 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
           </div>
 
           <div className="h-48 rounded-xl border border-sky-400/30 bg-slate-900/40 backdrop-blur-sm flex flex-col shadow-[0_0_20px_rgba(56,189,248,0.1)]">
-            <div className="px-4 py-2 bg-sky-900/20 border-b border-sky-500/20">
+            <div className="px-4 py-2 bg-sky-900/20 border-b border-sky-500/20 flex justify-between items-center">
               <span className="text-sm font-semibold text-sky-300">
                 Code Description / Problem Statement
               </span>
@@ -326,15 +378,6 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
                     Target
                   </span>
                 </div>
-                <select
-                  className="bg-slate-950 text-[10px] text-purple-200 border border-purple-500/30 rounded px-1 outline-none"
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                >
-                  <option value="javascript">JS</option>
-                  <option value="python">Python</option>
-                  <option value="cpp">C++</option>
-                </select>
               </div>
               <pre className="flex-1 p-3 text-[10px] text-purple-100/70 font-mono overflow-auto custom-scrollbar">
                 {translatedCode}
@@ -367,7 +410,7 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
                     <CheckCircle2 size={20} /> Ready to Submit?
                   </h3>
                   <p className="text-xs text-emerald-200/60">
-                    Ensure your description matches the logic provided, and validate your code first.
+                    Ensure you have provided a description, and validate your code first.
                   </p>
                 </div>
 

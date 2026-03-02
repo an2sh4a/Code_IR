@@ -42,11 +42,12 @@ export default function InstructorDashboard({
         .from("submissions")
         .select(
           `
-          *,
-          evaluations ( id, rubric_scores )
-        `,
+          submission_id, submission_timestamp, validation_status, source_code, user_id,
+          problems ( problem_statement ),
+          evaluations ( evaluation_id, final_scores )
+        `
         )
-        .order("created_at", { ascending: false });
+        .order("submission_timestamp", { ascending: false });
 
       if (error) throw error;
 
@@ -232,28 +233,28 @@ export default function InstructorDashboard({
                     const isEvaluated =
                       sub.evaluations && sub.evaluations.length > 0;
                     const score = isEvaluated
-                      ? (sub.evaluations[0].rubric_scores?.correctness || 0) +
-                        (sub.evaluations[0].rubric_scores?.efficiency || 0) +
-                        (sub.evaluations[0].rubric_scores?.style || 0)
+                      ? (sub.evaluations[0].final_scores?.correctness || 0) +
+                      (sub.evaluations[0].final_scores?.efficiency || 0) +
+                      (sub.evaluations[0].final_scores?.style || 0)
                       : "-";
 
                     return (
                       <tr
-                        key={sub.id}
+                        key={sub.submission_id}
                         className="hover:bg-white/5 transition-colors group"
                       >
                         <td className="p-4 font-mono text-slate-400">
                           {sub.user_id.slice(0, 8)}...
                         </td>
                         <td className="p-4 text-slate-200 font-medium">
-                          {sub.description
-                            ? sub.description.slice(0, 30) + "..."
+                          {sub.problems?.problem_statement
+                            ? sub.problems.problem_statement.slice(0, 30) + "..."
                             : "Untitled Problem"}
                         </td>
                         <td className="p-4 text-slate-400">
-                          {new Date(sub.created_at).toLocaleDateString()}{" "}
+                          {new Date(sub.submission_timestamp).toLocaleDateString()}{" "}
                           <span className="text-xs text-slate-600">
-                            {new Date(sub.created_at).toLocaleTimeString([], {
+                            {new Date(sub.submission_timestamp).toLocaleTimeString([], {
                               hour: "2-digit",
                               minute: "2-digit",
                             })}
@@ -279,7 +280,7 @@ export default function InstructorDashboard({
                         </td>
                         <td className="p-4 text-right">
                           <button
-                            onClick={() => onNavigate("evaluation", sub.id)}
+                            onClick={() => onNavigate("evaluation", sub.submission_id)}
                             className="px-3 py-1.5 text-xs font-bold bg-slate-800 text-slate-300 hover:bg-cyan-500 hover:text-white rounded border border-slate-700 hover:border-cyan-400 transition-all flex items-center gap-1 ml-auto"
                           >
                             {isEvaluated ? "Edit Grade" : "Grade Now"}{" "}

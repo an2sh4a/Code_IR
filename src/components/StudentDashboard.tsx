@@ -42,12 +42,14 @@ export default function StudentDashboard({
         .from("submissions")
         .select(
           `
-          *,
-          evaluations ( feedback )
-        `,
+          submission_id, submission_timestamp, validation_status, source_code,
+          problems ( problem_statement ),
+          pseudocodes ( structured_blocks, translations ( target_language, translated_code ) ),
+          evaluations ( teacher_feedback, final_scores )
+        `
         )
         .eq("user_id", session.user.id)
-        .order("created_at", { ascending: false });
+        .order("submission_timestamp", { ascending: false });
 
       if (error) throw error;
 
@@ -68,7 +70,7 @@ export default function StudentDashboard({
     const dateMap = new Map<string, number>();
 
     subs.forEach((s) => {
-      const date = new Date(s.created_at).toISOString().split("T")[0];
+      const date = new Date(s.submission_timestamp).toISOString().split("T")[0];
       dateMap.set(date, (dateMap.get(date) || 0) + 1);
     });
 
@@ -103,7 +105,7 @@ export default function StudentDashboard({
     if (subs.length === 0) return 0;
     const uniqueDates = Array.from(
       new Set(
-        subs.map((s) => new Date(s.created_at).toISOString().split("T")[0]),
+        subs.map((s) => new Date(s.submission_timestamp).toISOString().split("T")[0]),
       ),
     )
       .sort()
@@ -324,17 +326,17 @@ export default function StudentDashboard({
                 <tbody className="divide-y divide-yellow-500/10">
                   {submissions.map((sub) => (
                     <tr
-                      key={sub.id}
+                      key={sub.submission_id}
                       className="hover:bg-yellow-500/5 transition-colors"
                     >
                       <td className="p-4 max-w-[200px]">
                         <div className="font-medium text-slate-200 truncate">
-                          {sub.description
-                            ? sub.description.slice(0, 30) + "..."
+                          {sub.problems?.problem_statement
+                            ? sub.problems.problem_statement.slice(0, 30) + "..."
                             : "Untitled Problem"}
                         </div>
                         <div className="text-xs text-slate-500 mt-1">
-                          {new Date(sub.created_at).toLocaleDateString()}
+                          {new Date(sub.submission_timestamp).toLocaleDateString()}
                         </div>
                       </td>
                       <td className="p-4 font-mono text-xs text-slate-400 max-w-[150px]">
@@ -347,20 +349,20 @@ export default function StudentDashboard({
                       <td className="p-4 font-mono text-xs text-yellow-100/70 max-w-[150px]">
                         <div className="flex items-center gap-1">
                           <FileJson size={12} />
-                          {sub.ir_output ? "Generated" : "Pending"}
+                          {sub.pseudocodes ? "Generated" : "Pending"}
                         </div>
                       </td>
                       <td className="p-4 max-w-[200px]">
                         {sub.evaluations && sub.evaluations.length > 0 ? (
                           <div className="text-slate-300 text-xs italic">
-                            "{sub.evaluations[0].feedback || "No comments"}"
+                            "{sub.evaluations[0].teacher_feedback || "No comments"}"
                           </div>
                         ) : (
                           <span className="text-slate-600 text-xs">-</span>
                         )}
                       </td>
                       <td className="p-4">
-                        <StatusBadge status={sub.status} />
+                        <StatusBadge status={sub.validation_status} />
                       </td>
                     </tr>
                   ))}

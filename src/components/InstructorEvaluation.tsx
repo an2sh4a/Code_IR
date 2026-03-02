@@ -56,14 +56,18 @@ export default function InstructorEvaluation({
         // FETCH SPECIFIC SUBMISSION BASED ON ID
         const { data, error } = await supabase
           .from("submissions")
-          .select("*")
-          .eq("id", submissionId)
+          .select("*, pseudocodes ( structured_blocks )")
+          .eq("submission_id", submissionId)
           .single();
 
         if (data && !error) {
           setSubmission(data);
           setCode(data.source_code || "");
-          if (data.ir_output) setIrView(data.ir_output);
+          if (data.pseudocodes) {
+            setIrView(typeof data.pseudocodes.structured_blocks === 'string'
+              ? data.pseudocodes.structured_blocks
+              : JSON.stringify(data.pseudocodes.structured_blocks, null, 2));
+          }
         } else {
           console.error("Error fetching submission:", error);
         }
@@ -104,10 +108,9 @@ export default function InstructorEvaluation({
     try {
       const { error } = await supabase.from("evaluations").upsert(
         {
-          submission_id: submission.id,
-          instructor_id: user.id,
-          rubric_scores: scores,
-          feedback: feedback,
+          submission_id: submission.submission_id,
+          final_scores: scores,
+          teacher_feedback: feedback,
         },
         { onConflict: "submission_id" },
       );
@@ -326,10 +329,9 @@ export default function InstructorEvaluation({
                 onClick={handleSubmitEvaluation}
                 disabled={loading}
                 className={`w-full py-2 font-bold rounded shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all
-                  ${
-                    submission
-                      ? "bg-emerald-500 hover:bg-emerald-400 text-slate-900"
-                      : "bg-slate-700 text-slate-400 cursor-not-allowed hover:bg-slate-600"
+                  ${submission
+                    ? "bg-emerald-500 hover:bg-emerald-400 text-slate-900"
+                    : "bg-slate-700 text-slate-400 cursor-not-allowed hover:bg-slate-600"
                   }
                 `}
               >
