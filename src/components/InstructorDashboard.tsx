@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import axios from "axios";
 import {
   LayoutDashboard,
   ClipboardCheck,
@@ -37,21 +38,13 @@ export default function InstructorDashboard({
       if (!session) return;
       setUser(session.user);
 
-      // Fetch ALL submissions
-      const { data, error } = await supabase
-        .from("submissions")
-        .select(
-          `
-          submission_id, submission_timestamp, validation_status, source_code, user_id,
-          problems ( problem_statement ),
-          evaluations ( evaluation_id, final_scores )
-        `
-        )
-        .order("submission_timestamp", { ascending: false });
+      const response = await axios.get("http://localhost:5000/api/instructor/dashboard");
 
-      if (error) throw error;
+      if (!response.data.success) {
+        throw new Error(response.data.error || "Failed to fetch instructor dashboard data");
+      }
 
-      const safeData = data || [];
+      const safeData = response.data.data || [];
       setSubmissions(safeData);
 
       // Calculate Stats

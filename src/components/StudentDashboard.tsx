@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import axios from "axios";
 import {
   LayoutDashboard,
   Code as CodeIcon,
@@ -38,22 +39,13 @@ export default function StudentDashboard({
       if (!session) return;
       setUser(session.user);
 
-      const { data: subs, error } = await supabase
-        .from("submissions")
-        .select(
-          `
-          submission_id, submission_timestamp, validation_status, source_code,
-          problems ( problem_statement ),
-          pseudocodes ( structured_blocks, translations ( target_language, translated_code ) ),
-          evaluations ( teacher_feedback, final_scores )
-        `
-        )
-        .eq("user_id", session.user.id)
-        .order("submission_timestamp", { ascending: false });
+      const response = await axios.get(`http://localhost:5000/api/dashboard/${session.user.id}`);
 
-      if (error) throw error;
+      if (!response.data.success) {
+        throw new Error(response.data.error || "Failed to fetch student dashboard data");
+      }
 
-      const safeSubs = subs || [];
+      const safeSubs = response.data.data || [];
       setSubmissions(safeSubs);
       calculateStats(safeSubs);
       processCalendarData(safeSubs);

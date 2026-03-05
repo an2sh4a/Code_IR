@@ -151,6 +151,93 @@ app.post("/api/submissions", async (req, res) => {
     }
 });
 
+// 3. STUDENT DASHBOARD API
+app.get("/api/dashboard/:userId", async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { data, error } = await supabase
+            .from("submissions")
+            .select(`
+                submission_id, submission_timestamp, validation_status, source_code,
+                problems ( problem_statement ),
+                pseudocodes ( structured_blocks, translations ( target_language, translated_code ) ),
+                evaluations ( teacher_feedback, final_scores )
+            `)
+            .eq("user_id", userId)
+            .order("submission_timestamp", { ascending: false });
+
+        if (error) throw error;
+
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 4. INSTRUCTOR DASHBOARD API
+app.get("/api/instructor/dashboard", async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from("submissions")
+            .select(`
+                submission_id, submission_timestamp, validation_status, source_code, user_id,
+                problems ( problem_statement ),
+                evaluations ( evaluation_id, final_scores )
+            `)
+            .order("submission_timestamp", { ascending: false });
+
+        if (error) throw error;
+
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 5. FETCH SPECIFIC SUBMISSION FOR EVALUATION
+app.get("/api/submissions/:submissionId", async (req, res) => {
+    try {
+        const { submissionId } = req.params;
+        const { data, error } = await supabase
+            .from("submissions")
+            .select("*, pseudocodes ( structured_blocks )")
+            .eq("submission_id", submissionId)
+            .single();
+
+        if (error) throw error;
+
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 6. UPSERT EVALUATION API
+app.post("/api/evaluations", async (req, res) => {
+    try {
+        const { submissionId, scores, feedback } = req.body;
+
+        if (!submissionId) {
+            return res.status(400).json({ success: false, error: "Missing submission ID." });
+        }
+
+        const { error } = await supabase.from("evaluations").upsert(
+            {
+                submission_id: submissionId,
+                final_scores: scores,
+                teacher_feedback: feedback,
+            },
+            { onConflict: "submission_id" }
+        );
+
+        if (error) throw error;
+
+        res.status(200).json({ success: true, message: "Evaluation saved successfully" });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Backend Server running on http://localhost:${PORT}`);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Editor from "@monaco-editor/react";
 import { supabase } from "../lib/supabaseClient";
+import axios from "axios";
 import {
   Code as CodeIcon,
   FileJson,
@@ -54,13 +55,14 @@ export default function InstructorEvaluation({
 
       if (submissionId) {
         // FETCH SPECIFIC SUBMISSION BASED ON ID
-        const { data, error } = await supabase
-          .from("submissions")
-          .select("*, pseudocodes ( structured_blocks )")
-          .eq("submission_id", submissionId)
-          .single();
+        try {
+          const response = await axios.get(`http://localhost:5000/api/submissions/${submissionId}`);
 
-        if (data && !error) {
+          if (!response.data.success) {
+            throw new Error(response.data.error || "Failed to fetch submission details");
+          }
+
+          const data = response.data.data;
           setSubmission(data);
           setCode(data.source_code || "");
           if (data.pseudocodes) {
@@ -68,7 +70,7 @@ export default function InstructorEvaluation({
               ? data.pseudocodes.structured_blocks
               : JSON.stringify(data.pseudocodes.structured_blocks, null, 2));
           }
-        } else {
+        } catch (error) {
           console.error("Error fetching submission:", error);
         }
       } else {
@@ -106,19 +108,23 @@ export default function InstructorEvaluation({
     setLoading(true);
 
     try {
-      const { error } = await supabase.from("evaluations").upsert(
-        {
-          submission_id: submission.submission_id,
-          final_scores: scores,
-          teacher_feedback: feedback,
-        },
-        { onConflict: "submission_id" },
-      );
+      const payload = {
+        submissionId: submission.submission_id,
+        scores,
+        feedback
+      };
 
-      if (error) throw error;
+      const response = await axios.post("http://localhost:5000/api/evaluations", payload);
+
+      if (!response.data.success) {
+        throw new Error(response.data.error || "Failed to save evaluation");
+      }
+
       alert("Evaluation saved successfully!");
+      onBack();
     } catch (error: any) {
-      alert("Error saving evaluation: " + error.message);
+      alert("Error saving evaluation: " + (error.response?.data?.error || error.message));
+      console.error(error);
     } finally {
       setLoading(false);
     }
