@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import Editor from "@monaco-editor/react";
 import { supabase } from "../lib/supabaseClient";
+import axios from "axios";
 import {
   Code as CodeIcon,
   Brain,
@@ -76,59 +77,25 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
     setLoading(true);
 
     try {
-      // 0. Insert dynamically typed Problem
-      const { data: newProblem, error: problemError } = await supabase
-        .from("problems")
-        .insert({
-          problem_statement: description,
-        })
-        .select()
-        .single();
+      const payload = {
+        userId: user.id,
+        description,
+        code,
+        language,
+        irOutput,
+        translatedCode
+      };
 
-      if (problemError) throw problemError;
+      const response = await axios.post("http://localhost:5000/api/submissions", payload);
 
-      // 1. Insert Submission
-      const { data: sub, error: subError } = await supabase
-        .from("submissions")
-        .insert({
-          user_id: user.id,
-          problem_id: newProblem.problem_id,
-          source_code: code,
-          source_language: language,
-          validation_status: "valid",
-        })
-        .select()
-        .single();
-
-      if (subError) throw subError;
-
-      // 2. Insert Pseudocode
-      const { data: pseudo, error: pseudoError } = await supabase
-        .from("pseudocodes")
-        .insert({
-          submission_id: sub.submission_id,
-          structured_blocks: JSON.stringify({ ir: irOutput }),
-        })
-        .select()
-        .single();
-
-      if (pseudoError) throw pseudoError;
-
-      // 3. Insert Translations
-      const { error: transError } = await supabase
-        .from("translations")
-        .insert({
-          pseudocode_id: pseudo.pseudocode_id,
-          target_language: "multiple",
-          translated_code: translatedCode,
-        });
-
-      if (transError) throw transError;
-
-      setSubmissionSuccess(true);
-      setAiHints((prev) => [...prev, "Submission successful!"]);
+      if (response.data.success) {
+        setSubmissionSuccess(true);
+        setAiHints((prev) => [...prev, "Submission successful! Saved securely via backend."]);
+      } else {
+        throw new Error(response.data.error || "Unknown submission error.");
+      }
     } catch (error: any) {
-      alert("Error submitting: " + error.message);
+      alert("Error submitting: " + error.response?.data?.error || error.message);
     } finally {
       setLoading(false);
     }
@@ -148,63 +115,33 @@ export default function CodeEditor({ onNavigate }: CodeEditorProps) {
     setSubmissionSuccess(false);
 
     try {
-      // 1. Check Correctness
-      const resCorrectness = await fetch('http://localhost:11434/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gpt-oss', // Updated to match user's installed model
-          prompt: `You are an expert code reviewer. Read the following problem description and the provided code. Is the code a completely correct solution to the problem? Respond with EXACTLY the word 'CORRECT' if it is correct, or provide brief feedback on what is wrong if it is incorrect.\nProblem: ${description}\nCode:\n${code}`,
-          stream: false
-        })
+      const response = await axios.post("http://localhost:5000/api/evaluate-code", {
+        code,
+        description
       });
 
-      if (!resCorrectness.ok) throw new Error("Ollama endpoint not reachable");
+      const { success, status, feedback, irOutput: apiIrOutput, translatedCode: apiTranslatedCode, error } = response.data;
 
-      const dataCorrectness = await resCorrectness.json();
-      const feedback = dataCorrectness.response.trim();
+      if (!success) {
+        throw new Error(error || "Unknown validation error");
+      }
 
-      if (feedback.toUpperCase().includes("CORRECT") && feedback.length < 50) {
-        setAiHints(["Code is CORRECT! Generating IR and translations..."]);
-
-        // 2. Generate IR and Translations in parallel
-        const [resIR, resTranslate] = await Promise.all([
-          fetch('http://localhost:11434/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gpt-oss',
-              prompt: `Generate high-level pseudocode for the following code. Output ONLY the pseudocode. Do not include any other text.\nCode:\n${code}`,
-              stream: false
-            })
-          }),
-          fetch('http://localhost:11434/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gpt-oss',
-              prompt: `Translate the following code into Python, Java, and C++. Format the output clearly with markdown code blocks.\nCode:\n${code}`,
-              stream: false
-            })
-          })
-        ]);
-
-        const dataIR = await resIR.json();
-        const dataTranslate = await resTranslate.json();
-
-        setIrOutput(dataIR.response);
-        setTranslatedCode(dataTranslate.response);
+      if (status === "valid" && feedback === "CORRECT") {
+        setIrOutput(apiIrOutput);
+        setTranslatedCode(apiTranslatedCode);
         setAiHints(["Validation complete. Code is correct. You can now save your submission."]);
         setIsValidated(true);
       } else {
-        setAiHints(["Validation Failed", feedback, "Please fix your code and try validating again."]);
         setIrOutput("Validation failed. Please fix the code based on the feedback.");
         setTranslatedCode("Validation failed. Please fix the code based on the feedback.");
+        setAiHints(["Validation Failed", feedback, "Please fix your code and try validating again."]);
+        setIsValidated(false);
       }
     } catch (error: any) {
-      setAiHints(["Error validating with local LLM. Make sure Ollama is running.", error.message]);
-      setIrOutput("Error connecting to evaluation engine.");
-      setTranslatedCode("Error connecting to evaluation engine.");
+      console.error(error);
+      setAiHints(["Error communicating with backend validation server.", error.message]);
+      setIrOutput("Error connecting to backend API.");
+      setTranslatedCode("Error connecting to backend API.");
     } finally {
       setIsEvaluating(false);
     }

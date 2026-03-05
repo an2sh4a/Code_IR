@@ -16,12 +16,140 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const axios = require("axios");
+
 // Basic health check route
 app.get("/api/health", (req, res) => {
     res.status(200).json({ status: "ok", message: "CodeIR Express Backend is running!" });
 });
 
-// We will add the evaluation and submission API routes in the next phases
+// 1. EVALUATION AND CODE VALIDATION ENDPOINT
+app.post("/api/evaluate-code", async (req, res) => {
+    const { code, description } = req.body;
+
+    if (!code || !description) {
+        return res.status(400).json({ success: false, error: "Code and description are required." });
+    }
+
+    try {
+        console.log("Validating correctness with Ollama...");
+
+        // Step 1: Check Correctness
+        const resCorrectness = await axios.post('http://localhost:11434/api/generate', {
+            model: 'gpt-oss',
+            prompt: `You are an expert code reviewer. Read the following problem description and the provided code. Is the code a completely correct solution to the problem? Respond with EXACTLY the word 'CORRECT' if it is correct, or provide brief feedback on what is wrong if it is incorrect.\nProblem: ${description}\nCode:\n${code}`,
+            stream: false
+        });
+
+        const feedback = resCorrectness.data.response.trim();
+
+        if (feedback.toUpperCase().includes("CORRECT") && feedback.length < 50) {
+            console.log("Code is CORRECT! Generating IR and translations...");
+
+            // Step 2: Generate IR and Translations in parallel
+            const [resIR, resTranslate] = await Promise.all([
+                axios.post('http://localhost:11434/api/generate', {
+                    model: 'gpt-oss',
+                    prompt: `Generate high-level pseudocode for the following code. Output ONLY the pseudocode. Do not include any other text.\nCode:\n${code}`,
+                    stream: false
+                }),
+                axios.post('http://localhost:11434/api/generate', {
+                    model: 'gpt-oss',
+                    prompt: `Translate the following code into Python, Java, and C++. Format the output clearly with markdown code blocks.\nCode:\n${code}`,
+                    stream: false
+                })
+            ]);
+
+            const irOutput = resIR.data.response;
+            const translatedCode = resTranslate.data.response;
+
+            return res.status(200).json({
+                success: true,
+                status: "valid",
+                feedback: "CORRECT",
+                irOutput,
+                translatedCode
+            });
+        } else {
+            console.log("Validation Failed:", feedback);
+            return res.status(200).json({
+                success: true,
+                status: "invalid",
+                feedback
+            });
+        }
+
+    } catch (error) {
+        console.error("Evaluation Error:", error.message);
+        return res.status(500).json({ success: false, error: "Failed to connect to Ollama evaluating engine.", details: error.message });
+    }
+});
+
+// 2. DATABASE SUBMISSION ENDPOINT (Relational Inserts)
+app.post("/api/submissions", async (req, res) => {
+    const { userId, description, code, language, irOutput, translatedCode } = req.body;
+
+    if (!userId || !description || !code || !irOutput) {
+        return res.status(400).json({ success: false, error: "Missing required fields for submission." });
+    }
+
+    try {
+        console.log("Handling database inserts...");
+
+        // 1. Insert Problem dynamically
+        const { data: newProblem, error: problemError } = await supabase
+            .from("problems")
+            .insert({ problem_statement: description })
+            .select()
+            .single();
+
+        if (problemError) throw problemError;
+
+        // 2. Insert Submission
+        const { data: sub, error: subError } = await supabase
+            .from("submissions")
+            .insert({
+                user_id: userId,
+                problem_id: newProblem.problem_id,
+                source_code: code,
+                source_language: language,
+                validation_status: "valid",
+            })
+            .select()
+            .single();
+
+        if (subError) throw subError;
+
+        // 3. Insert Pseudocode
+        const { data: pseudo, error: pseudoError } = await supabase
+            .from("pseudocodes")
+            .insert({
+                submission_id: sub.submission_id,
+                structured_blocks: JSON.stringify({ ir: irOutput }),
+            })
+            .select()
+            .single();
+
+        if (pseudoError) throw pseudoError;
+
+        // 4. Insert Translations
+        const { error: transError } = await supabase
+            .from("translations")
+            .insert({
+                pseudocode_id: pseudo.pseudocode_id,
+                target_language: "multiple",
+                translated_code: translatedCode,
+            });
+
+        if (transError) throw transError;
+
+        return res.status(201).json({ success: true, message: "Submission successfully securely saved!" });
+
+    } catch (error) {
+        console.error("Database Insert Error:", error.message);
+        return res.status(500).json({ success: false, error: "Database transaction failed.", details: error.message });
+    }
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
